@@ -1,5 +1,3 @@
-# tests/test_enable_2fa_flow.py
-
 import pytest
 import pyotp
 from pages.auth_page import AuthPage
