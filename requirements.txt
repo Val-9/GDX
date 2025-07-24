@@ -1,0 +1,8 @@
+playwright
+pytest
+python-dotenv>=0.21.0
+rich>=13.0.0
+pytest-html
+py>=1.10.0
+pyotp>=2.8
+requests>=2.28 
