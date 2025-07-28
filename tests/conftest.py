@@ -1,3 +1,4 @@
+# conftest.py
 import os
 import pytest
 import pyotp
@@ -5,7 +6,8 @@ from dotenv import load_dotenv
 from typing import Generator
 from playwright.sync_api import sync_playwright, Playwright, Browser, BrowserContext, Page
 from pages.auth_page import AuthPage
-from pages.twoFaSettings_page import TwoFaSettingsPage
+from pages.main_page import MainPage
+from pages.profile_page import ProfilePage
 from pages.navbar import Navbar
 from utils.base_test import BaseTest
 from utils.helpers import take_screenshot
@@ -54,8 +56,12 @@ def auth_page(page: Page) -> AuthPage:
     return AuthPage(page)
 
 @pytest.fixture(scope="function")
-def twofa_page(page: Page) -> TwoFaSettingsPage:
-    return TwoFaSettingsPage(page)
+def main_page(page: Page) -> MainPage:
+    return MainPage(page)
+
+@pytest.fixture(scope="function")
+def profile_page(page: Page) -> ProfilePage:
+    return ProfilePage(page)
 
 @pytest.fixture(scope="function")
 def navbar(page: Page) -> Navbar:
@@ -63,43 +69,58 @@ def navbar(page: Page) -> Navbar:
 
 # Улучшенная фикстура для работы с 2FA - теперь с функциональным scope
 @pytest.fixture(scope="function")
-def setup_2fa(auth_page: AuthPage, twofa_page: TwoFaSettingsPage, creds: tuple[str, str]) -> str:
+def setup_2fa(auth_page: AuthPage, profile_page: ProfilePage, creds: tuple[str, str]) -> str:
     """
     Фикстура для настройки 2FA в рамках одного теста.
     Возвращает секрет и автоматически очищает состояние после теста.
     """
     email, pwd = creds
     secret = None
-    
-    # Выполняем настройку 2FA
-    auth_page.full_login(email, pwd)
-    twofa_page.go_to_profile_enable()
-    secret = twofa_page.enable()
-    
-    # Сохраняем секрет для отладки
-    path = os.path.join(os.getcwd(), "last_twofa_secret.txt")
+
     try:
+        # 1. Выполняем вход без 2FA
+        auth_page.full_login(email, pwd)
+
+        # 2. Переходим на страницу профиля
+        profile_page.navigate_to()
+
+        # 3. Включаем 2FA и получаем секрет
+        secret = profile_page.enable_2fa()
+
+        # 4. Сохраняем секрет для отладки и использования другими тестами
+        path = os.path.join(os.getcwd(), "last_twofa_secret.txt")
         with open(path, "w", encoding="utf-8") as f:
             f.write(secret)
         logger.info(f"2FA secret saved to {path}")
+
+        # 5. Подтверждаем включение 2FA
+        code = pyotp.TOTP(secret).now()
+        profile_page.confirm_enable_2fa(code)
+
+        logger.info("2FA enabled via setup_2fa fixture")
+
     except Exception as e:
-        logger.warning(f"Failed to save 2FA secret: {e}")
-    
-    # Подтверждаем включение
-    code = pyotp.TOTP(secret).now()
-    twofa_page.confirm_enable(code)
-    
+        logger.error(f"Failed to setup 2FA in fixture: {e}")
+        pytest.fail(f"2FA setup failed: {e}")
+
+    # --- Передача значения секрета в тест ---
     yield secret
-    
-    # Автоматическая очистка после теста
+    # --- Конец передачи значения ---
+
+    # --- Автоматическая очистка (отключение 2FA) после теста ---
     try:
-        # Отключаем 2FA после теста
-        twofa_page.go_to_profile_disable()
-        disable_code = pyotp.TOTP(secret).now()
-        twofa_page.disable(pwd, disable_code)
-        logger.info("2FA disabled after test")
+        logger.info("Attempting to disable 2FA after test (teardown)")
+        # Для отключения 2FA нужен код TOTP и пароль
+        if secret: # Убедимся, что секрет был создан
+            disable_code = pyotp.TOTP(secret).now()
+            profile_page.disable_2fa(pwd, disable_code) # Используем обновлённый метод
+            logger.info("2FA disabled after test (teardown successful)")
+        else:
+            logger.warning("2FA secret was not generated, skipping disable teardown")
     except Exception as e:
-        logger.warning(f"Failed to disable 2FA after test: {e}")
+        logger.warning(f"Failed to disable 2FA after test (teardown failed): {e}")
+        # Не вызываем pytest.fail здесь, чтобы не маскировать ошибку основного теста
+    # --- Конец автоматической очистки ---
 
 # Безопасная фикстура для чтения сохраненного секрета
 @pytest.fixture(scope="session")
@@ -124,7 +145,7 @@ def pytest_runtest_makereport(item, call):
     page = item.funcargs.get("page")
     if not page or rep.when != "call":
         return
-    
+
     try:
         if rep.failed:
             take_screenshot(page, f"{item.name}_failure")

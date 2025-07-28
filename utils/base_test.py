@@ -42,19 +42,37 @@ class BaseTest:
     def open_url(
         self,
         url: str,
-        wait_until: Literal['commit','domcontentloaded','load','networkidle'] = 'load',
+        wait_until: Literal['commit', 'domcontentloaded', 'load'] = 'load',
         timeout: int = 30000
     ) -> None:
-        """Открывает страницу с ретраями."""
+        """
+        Открывает страницу с ретраями и улучшенной обработкой загрузки.
+        """
         # Нормализация URL
-        if not url.startswith(('http://','https://','chrome-extension')):
+        if not url.startswith(('http://', 'https://', 'chrome-extension')):
             url = f'https://{url}'
-            
+
         if self.page.url != url:
             logger.info(f"Открытие URL: {url}")
             try:
-                self.page.goto(url, wait_until=wait_until, timeout=timeout)
-                logger.info(f"Страница загружена: {self.page.url}")
+                # Пробуем открыть страницу с базовым ожиданием
+                self.page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+                logger.info(f"Страница загружена (DOM ready): {self.page.url}")
+                
+                # Дополнительно ждем полной загрузки ресурсов, но с обработкой таймаута
+                try:
+                    self.page.wait_for_load_state("load", timeout=10000)
+                    logger.info("Страница полностью загружена (load event)")
+                except TimeoutError:
+                    logger.warning("Таймаут ожидания полной загрузки, но DOM готов")
+                    
+                # Ждем появления body страницы как дополнительную проверку
+                try:
+                    self.page.wait_for_selector("body", timeout=5000)
+                    logger.info("Body страницы найден")
+                except TimeoutError:
+                    logger.warning("Таймаут ожидания body, но страница загружена")
+                    
             except Exception as e:
                 logger.error(f"Не удалось открыть страницу {url}: {e}")
                 take_screenshot(self.page, "open_url_failed")
